@@ -15,7 +15,7 @@ const ANGLES = [
   { id:"social",  label:"📚 NYT List",     color:"#5fafff" },
   { id:"gift",    label:"🎁 Gift Angle",   color:"#ff8c42" },
 ];
-const WORKER = "https://epn-book-scout.YOUR_SUBDOMAIN.workers.dev";
+const WORKER = "https://finddeals.trovescore.com/";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const buildEpnLink = (campid, url) =>
