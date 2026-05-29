@@ -72,8 +72,8 @@ async function fetchEbay(query) {
 // ─── Scout: NYT list → eBay prices → scored deals ────────────────────────────
 async function scoutCategory(catId) {
   const listNames = catId === "mg"
-    ? ["middle-grade", "childrens-middle-grade", "chapter-books"]
-    : ["young-adult"];
+    ? ["childrens-middle-grade-hardcover", "childrens-middle-grade-paperback", "middle-grade-paperback-monthly"]
+    : ["young-adult-hardcover", "young-adult-paperback"];
 
   const nytBooks = await fetchNYT(listNames);
 
