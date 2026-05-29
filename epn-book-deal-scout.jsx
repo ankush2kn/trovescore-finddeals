@@ -43,7 +43,7 @@ const toTitleCase = s => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase
 async function fetchNYT(listNames) {
   for (const list of listNames) {
     let res;
-    try { res = await fetch(`${WORKER}/nyt?list=${encodeURIComponent(list)}`); }
+    try { res = await fetch(`${WORKER.replace(/\/$/, "")}/nyt?list=${encodeURIComponent(list)}`); }
     catch { throw new Error("Cannot reach worker. Deploy the Cloudflare Worker and update the WORKER constant."); }
     if (!res.ok) continue;
     const data = await res.json();
@@ -55,7 +55,7 @@ async function fetchNYT(listNames) {
 
 async function fetchEbay(query) {
   let res;
-  try { res = await fetch(`${WORKER}/ebay?q=${encodeURIComponent(query)}`); }
+  try { res = await fetch(`${WORKER.replace(/\/$/, "")}/ebay?q=${encodeURIComponent(query)}`); }
   catch { return []; }
   if (res.status === 401 || res.status === 403) {
     const err = await res.json().catch(() => ({}));
