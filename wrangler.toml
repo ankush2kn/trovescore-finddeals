@@ -1,0 +1,7 @@
+name = "epn-book-scout"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# Set secrets via CLI — never commit values here:
+#   wrangler secret put NYT_API_KEY
+#   wrangler secret put EBAY_APP_ID
