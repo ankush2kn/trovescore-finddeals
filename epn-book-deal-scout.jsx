@@ -15,7 +15,7 @@ const ANGLES = [
   { id:"social",  label:"📚 NYT List",     color:"#5fafff" },
   { id:"gift",    label:"🎁 Gift Angle",   color:"#ff8c42" },
 ];
-const WORKER = "https://finddeals.trovescore.com/";
+const WORKER = import.meta.env.DEV ? "" : "https://finddeals.trovescore.com";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const buildEpnLink = (campid, url) =>
