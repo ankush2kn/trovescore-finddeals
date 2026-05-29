@@ -65,7 +65,7 @@ async function fetchEbay(query) {
   }
   if (!res.ok) return [];
   const data = await res.json();
-  return data?.findItemsByKeywordsResponse?.[0]?.searchResult?.[0]?.item || [];
+  return data?.itemSummaries || [];
 }
 
 // ─── Scout: NYT list → eBay prices → scored deals ────────────────────────────
@@ -79,11 +79,11 @@ async function scoutCategory(catId) {
     const items = await fetchEbay(book.title);
     const scored = items
       .map(item => {
-        const priceStr = item.sellingStatus?.[0]?.currentPrice?.[0]?.["__value__"];
+        const priceStr = item.price?.value;
         if (!priceStr) return null;
         const price = parseFloat(priceStr);
         if (price > 20) return null;
-        const condId = item.condition?.[0]?.conditionId?.[0] || "4000";
+        const condId = item.conditionId || "4000";
         const condScore = { "1000": 5, "2500": 4, "3000": 3, "4000": 2 }[condId] || 1;
         const priceScore = price <= 8 ? 5 : price <= 12 ? 4 : price <= 18 ? 3 : 2;
         return {
@@ -91,8 +91,8 @@ async function scoutCategory(catId) {
           author: book.author,
           price: `$${price.toFixed(2)}`,
           priceRaw: price,
-          condition: item.condition?.[0]?.conditionDisplayName?.[0] || "Used",
-          ebayUrl: item.viewItemURL?.[0] || "",
+          condition: item.condition || "Used",
+          ebayUrl: item.itemWebUrl || "",
           description: book.description || "",
           dealScore: priceScore * 2 + condScore,
           nytRank: book.rank,

@@ -3,6 +3,29 @@ const CORS = {
   'Content-Type': 'application/json',
 };
 
+// Module-level token cache (lives for the duration of the isolate)
+let ebayToken = { value: null, expiresAt: 0 };
+
+async function getEbayToken(env) {
+  if (ebayToken.value && Date.now() < ebayToken.expiresAt) return ebayToken.value;
+  const credentials = btoa(`${env.EBAY_APP_ID}:${env.EBAY_APP_SECRET}`);
+  const res = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Basic ${credentials}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials&scope=https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope',
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`eBay auth ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  ebayToken = { value: data.access_token, expiresAt: Date.now() + (data.expires_in - 60) * 1000 };
+  return ebayToken.value;
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') {
@@ -57,25 +80,18 @@ export default {
       if (!q) {
         return new Response(JSON.stringify({ error: 'Missing q parameter' }), { status: 400, headers: CORS });
       }
-      const params = new URLSearchParams({
-        'OPERATION-NAME': 'findItemsByKeywords',
-        'SERVICE-VERSION': '1.0.0',
-        'SECURITY-APPNAME': env.EBAY_APP_ID,
-        'RESPONSE-DATA-FORMAT': 'JSON',
-        'keywords': q,
-        'categoryId': '267',
-        'paginationInput.entriesPerPage': '8',
-        'itemFilter(0).name': 'ListingType',
-        'itemFilter(0).value': 'FixedPrice',
-        'itemFilter(1).name': 'Condition',
-        'itemFilter(1).value(0)': '1000',
-        'itemFilter(1).value(1)': '2500',
-        'itemFilter(1).value(2)': '3000',
-        'sortOrder': 'BestMatch',
-      });
-      const ebayUrl = `https://svcs.ebay.com/services/search/FindingService/v1?${params}`;
       try {
-        const res = await fetch(ebayUrl);
+        const token = await getEbayToken(env);
+        const params = new URLSearchParams({
+          q,
+          category_ids: '267',
+          filter: 'buyingOptions:{FIXED_PRICE},price:[1..20],priceCurrency:USD',
+          limit: '8',
+          sort: 'bestMatch',
+        });
+        const res = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
         if (!res.ok) {
           const body = await res.text();
           return new Response(
@@ -95,7 +111,7 @@ export default {
         hasNyt: !!env.NYT_API_KEY,
         nytLen: (env.NYT_API_KEY || '').length,
         hasEbay: !!env.EBAY_APP_ID,
-        ebayLen: (env.EBAY_APP_ID || '').length,
+        hasEbaySecret: !!env.EBAY_APP_SECRET,
       }), { headers: CORS });
     }
 
