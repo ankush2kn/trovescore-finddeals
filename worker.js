@@ -90,8 +90,17 @@ export default {
       }
     }
 
+    if (url.pathname === '/debug') {
+      return new Response(JSON.stringify({
+        hasNyt: !!env.NYT_API_KEY,
+        nytLen: (env.NYT_API_KEY || '').length,
+        hasEbay: !!env.EBAY_APP_ID,
+        ebayLen: (env.EBAY_APP_ID || '').length,
+      }), { headers: CORS });
+    }
+
     return new Response(
-      JSON.stringify({ status: 'ok', endpoints: ['/nyt', '/ebay'] }),
+      JSON.stringify({ status: 'ok', endpoints: ['/nyt', '/ebay', '/debug'] }),
       { headers: CORS }
     );
   },
