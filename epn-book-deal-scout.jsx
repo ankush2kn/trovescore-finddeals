@@ -72,37 +72,36 @@ async function fetchEbay(query) {
 async function scoutCategory(catId) {
   const nytBooks = await fetchNYT(catId);
 
-  const results = await Promise.all(
-    nytBooks.slice(0, 10).map(async (book) => {
-      const items = await fetchEbay(book.title);
-      const scored = items
-        .map(item => {
-          const priceStr = item.sellingStatus?.[0]?.currentPrice?.[0]?.["__value__"];
-          if (!priceStr) return null;
-          const price = parseFloat(priceStr);
-          if (price > 20) return null;
-          const condId = item.condition?.[0]?.conditionId?.[0] || "4000";
-          const condScore = { "1000": 5, "2500": 4, "3000": 3, "4000": 2 }[condId] || 1;
-          const priceScore = price <= 8 ? 5 : price <= 12 ? 4 : price <= 18 ? 3 : 2;
-          return {
-            title: toTitleCase(book.title),
-            author: book.author,
-            price: `$${price.toFixed(2)}`,
-            priceRaw: price,
-            condition: item.condition?.[0]?.conditionDisplayName?.[0] || "Used",
-            ebayUrl: item.viewItemURL?.[0] || "",
-            description: book.description || "",
-            dealScore: priceScore * 2 + condScore,
-            nytRank: book.rank,
-            nytWeeks: book.weeks_on_list,
-          };
-        })
-        .filter(Boolean);
-
-      if (!scored.length) return null;
-      return scored.sort((a, b) => b.dealScore - a.dealScore)[0];
-    })
-  );
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const results = [];
+  for (const [i, book] of nytBooks.slice(0, 10).entries()) {
+    if (i > 0) await sleep(400);
+    const items = await fetchEbay(book.title);
+    const scored = items
+      .map(item => {
+        const priceStr = item.sellingStatus?.[0]?.currentPrice?.[0]?.["__value__"];
+        if (!priceStr) return null;
+        const price = parseFloat(priceStr);
+        if (price > 20) return null;
+        const condId = item.condition?.[0]?.conditionId?.[0] || "4000";
+        const condScore = { "1000": 5, "2500": 4, "3000": 3, "4000": 2 }[condId] || 1;
+        const priceScore = price <= 8 ? 5 : price <= 12 ? 4 : price <= 18 ? 3 : 2;
+        return {
+          title: toTitleCase(book.title),
+          author: book.author,
+          price: `$${price.toFixed(2)}`,
+          priceRaw: price,
+          condition: item.condition?.[0]?.conditionDisplayName?.[0] || "Used",
+          ebayUrl: item.viewItemURL?.[0] || "",
+          description: book.description || "",
+          dealScore: priceScore * 2 + condScore,
+          nytRank: book.rank,
+          nytWeeks: book.weeks_on_list,
+        };
+      })
+      .filter(Boolean);
+    results.push(scored.length ? scored.sort((a, b) => b.dealScore - a.dealScore)[0] : null);
+  }
 
   const deals = results
     .filter(d => d && d.dealScore >= 3 && d.ebayUrl.includes("ebay.com"))
