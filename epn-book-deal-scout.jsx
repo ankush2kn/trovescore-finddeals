@@ -44,13 +44,16 @@ async function fetchNYT(listNames) {
   for (const list of listNames) {
     let res;
     try { res = await fetch(`${WORKER.replace(/\/$/, "")}/nyt?list=${encodeURIComponent(list)}`); }
-    catch { throw new Error("Cannot reach worker. Deploy the Cloudflare Worker and update the WORKER constant."); }
+    catch { throw new Error("Cannot reach worker. Check the WORKER URL."); }
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`NYT API key rejected (${res.status}). Go to Cloudflare Worker → Settings → Variables and set NYT_API_KEY as an encrypted secret.`);
+    }
     if (!res.ok) continue;
     const data = await res.json();
     const books = data.results?.books;
     if (books?.length) return books;
   }
-  throw new Error("NYT list unavailable. Check your worker URL and NYT API key.");
+  throw new Error("No books found on any NYT list. The list names may have changed — check the NYT Books API docs.");
 }
 
 async function fetchEbay(query) {
