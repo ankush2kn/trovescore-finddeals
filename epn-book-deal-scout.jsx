@@ -42,10 +42,13 @@ const buildTweet = (deal, angleId, catId, campid) => {
 // ─── Worker fetch helpers ─────────────────────────────────────────────────────
 const toTitleCase = s => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
 
+const NYT_LIST = { mg: "middle-grade", ya: "young-adult" };
+
 async function fetchNYT(catId) {
   const base = WORKER.replace(/\/$/, "");
+  const list = NYT_LIST[catId] || "young-adult";
   let res;
-  try { res = await fetch(`${base}/nyt?category=${catId}`); }
+  try { res = await fetch(`${base}/nyt?list=${list}`); }
   catch { throw new Error("Cannot reach worker. Check the WORKER URL."); }
   if (res.status === 401 || res.status === 403) {
     throw new Error(`NYT API key rejected (${res.status}). Go to Cloudflare Worker → Settings → Variables and set NYT_API_KEY as an encrypted secret.`);
