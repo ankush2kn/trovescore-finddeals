@@ -60,14 +60,18 @@ async function fetchNYT(catId) {
 async function fetchEbay(query) {
   let res;
   try { res = await fetch(`${WORKER.replace(/\/$/, "")}/ebay?q=${encodeURIComponent(query)}`); }
-  catch { return []; }
+  catch { return { items: [], tokensIn: 0, tokensOut: 0 }; }
   if (res.status === 401 || res.status === 403) {
     const err = await res.json().catch(() => ({}));
     throw new Error(`eBay API key rejected (${res.status}). ${err.detail || "Check EBAY_APP_ID secret."}`);
   }
-  if (!res.ok) return [];
+  if (!res.ok) return { items: [], tokensIn: 0, tokensOut: 0 };
   const data = await res.json();
-  return data?.itemSummaries || [];
+  return {
+    items:    data?.itemSummaries || [],
+    tokensIn:  data?.usage?.input_tokens  || 0,
+    tokensOut: data?.usage?.output_tokens || 0,
+  };
 }
 
 // ─── Scout: NYT list → eBay prices → two-tier deals ─────────────────────────
@@ -77,10 +81,13 @@ async function scoutCategory(catId) {
 
   const budgetCandidates  = [];
   const premiumCandidates = [];
+  let totalTokensIn = 0, totalTokensOut = 0;
 
   for (const [i, book] of nytBooks.slice(0, 10).entries()) {
     if (i > 0) await sleep(400);
-    const items = await fetchEbay(book.title);
+    const { items, tokensIn, tokensOut } = await fetchEbay(book.title);
+    totalTokensIn  += tokensIn;
+    totalTokensOut += tokensOut;
 
     const newItems    = items.filter(it => it.conditionId === "1000");
     const usedItems   = items.filter(it => ["2500","3000","4000","5000"].includes(it.conditionId));
@@ -93,6 +100,9 @@ async function scoutCategory(catId) {
       if (!priceStr) continue;
       const price = parseFloat(priceStr);
       if (price > 200 || !item.itemWebUrl?.includes("ebay.com")) continue;
+
+      const feedbackPct = parseFloat(item.seller?.feedbackPercentage);
+      if (!isNaN(feedbackPct) && feedbackPct < 98) continue;
 
       const condId     = item.conditionId || "4000";
       const condScore  = { "2500": 5, "3000": 4, "4000": 3, "5000": 2 }[condId] || 1;
@@ -119,7 +129,7 @@ async function scoutCategory(catId) {
         budgetCandidates.push({ ...deal, dealScore: priceScore * 2 + condScore + gapBonus });
       }
 
-      if (price <= 200 && (savingsVsNew || 0) >= 20) {
+      if (price > 20 && price <= 200 && (savingsVsNew || 0) >= 20) {
         const priceScore = price <= 30 ? 5 : price <= 60 ? 4 : price <= 100 ? 3 : 2;
         const gapBonus   = (savingsVsNew || 0) >= 50 ? 3 : (savingsVsNew || 0) >= 30 ? 2 : 1;
         premiumCandidates.push({ ...deal, dealScore: priceScore + condScore + gapBonus });
@@ -146,7 +156,7 @@ async function scoutCategory(catId) {
   if (!budgetDeals.length && !premiumDeals.length)
     throw new Error("No deals found. Try again or check eBay inventory.");
 
-  return { budgetDeals, premiumDeals };
+  return { budgetDeals, premiumDeals, tokensIn: totalTokensIn, tokensOut: totalTokensOut };
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -202,11 +212,14 @@ const DealCard = ({ deal, campid, catId, idx, onPost, schedDate }) => {
             {deal.price}
           </div>
           {deal.newRefPrice && (
-            <div style={{ fontFamily:"monospace", fontSize:"0.58rem", color:"#444", marginTop:1 }}>
-              new ${deal.newRefPrice.toFixed(2)}
+            <div style={{ fontFamily:"monospace", fontSize:"0.58rem", marginTop:2, lineHeight:1.6, textAlign:"right" }}>
+              <span style={{ color:"#444" }}>New: ${deal.newRefPrice.toFixed(2)}</span>
+              {deal.savingsVsNew && (
+                <span style={{ color:"#2a9d5c", marginLeft:5 }}>{deal.savingsVsNew}% off</span>
+              )}
             </div>
           )}
-          {!deal.newRefPrice && <div style={{ fontFamily:"monospace", fontSize:"0.58rem", color:"#444", marginTop:1 }}>LIVE PRICE</div>}
+          {!deal.newRefPrice && <div style={{ fontFamily:"monospace", fontSize:"0.58rem", color:"#333", marginTop:1 }}>LIVE PRICE</div>}
         </div>
       </div>
 
@@ -399,6 +412,12 @@ const HistoryPage = ({ runs, onDelete, onBack, campid, onPost }) => {
                     ⚡ {run.yaDeals.length} YA
                     <span style={{ margin:"0 8px", color:"#2a2a2a" }}>·</span>
                     {run.mgDeals.length + run.yaDeals.length} total deals
+                    {(run.tokensIn > 0 || run.tokensOut > 0) && (<>
+                      <span style={{ margin:"0 8px", color:"#2a2a2a" }}>·</span>
+                      <span title="LLM tokens used">
+                        {(run.tokensIn || 0).toLocaleString()} in / {(run.tokensOut || 0).toLocaleString()} out tokens
+                      </span>
+                    </>)}
                   </div>
                 </div>
                 <div style={{ display:"flex", gap:6, flexShrink:0 }}>
@@ -513,15 +532,15 @@ export default function App() {
       const setStatus  = catId==="mg" ? setMgStatus  : setYaStatus;
       const setError   = catId==="mg" ? setMgError   : setYaError;
       try {
-        const { budgetDeals, premiumDeals } = await scoutCategory(catId);
+        const { budgetDeals, premiumDeals, tokensIn, tokensOut } = await scoutCategory(catId);
         setBudget(budgetDeals);
         setPremium(premiumDeals);
         setStatus("done");
-        return { budgetDeals, premiumDeals };
+        return { budgetDeals, premiumDeals, tokensIn, tokensOut };
       } catch(e) {
         setError(e.message);
         setStatus("error");
-        return { budgetDeals: [], premiumDeals: [] };
+        return { budgetDeals: [], premiumDeals: [], tokensIn: 0, tokensOut: 0 };
       }
     };
 
@@ -535,6 +554,8 @@ export default function App() {
         id: Date.now(), date: new Date().toISOString(),
         mgDeals: [...mgResult.budgetDeals, ...mgResult.premiumDeals],
         yaDeals: [...yaResult.budgetDeals, ...yaResult.premiumDeals],
+        tokensIn:  (mgResult.tokensIn  || 0) + (yaResult.tokensIn  || 0),
+        tokensOut: (mgResult.tokensOut || 0) + (yaResult.tokensOut || 0),
       };
       setRuns(prev => {
         const updated = [run, ...prev].slice(0, 100);
