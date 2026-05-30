@@ -85,8 +85,8 @@ export default {
         const params = new URLSearchParams({
           q,
           category_ids: '267',
-          filter: 'buyingOptions:{FIXED_PRICE},price:[1..20],priceCurrency:USD',
-          limit: '8',
+          filter: 'buyingOptions:{FIXED_PRICE},price:[1..200],priceCurrency:USD',
+          limit: '10',
           sort: 'bestMatch',
         });
         const res = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`, {

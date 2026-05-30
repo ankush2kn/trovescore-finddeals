@@ -29,7 +29,9 @@ const buildTweet = (deal, angleId, catId, campid) => {
   const cat   = CATS.find(c=>c.id===catId);
   const rank  = deal.nytRank ? `#${deal.nytRank} NYT` : "NYT Bestseller";
   const bodies = {
-    urgency: `⚡ "${deal.title}" — ${deal.price} on eBay (${deal.condition})`,
+    urgency: deal.savingsVsNew && deal.newRefPrice
+      ? `⚡ "${deal.title}" Like New $${deal.priceRaw.toFixed(2)} — new $${deal.newRefPrice.toFixed(2)}! Save ${deal.savingsVsNew}%`
+      : `⚡ "${deal.title}" — ${deal.price} on eBay (${deal.condition})`,
     social:  `📚 ${rank}: "${deal.title}" — only ${deal.price} on eBay`,
     gift:    `🎁 Perfect gift for ${cat.ageShort}: "${deal.title}" — ${deal.price}`,
   };
@@ -68,48 +70,83 @@ async function fetchEbay(query) {
   return data?.itemSummaries || [];
 }
 
-// ─── Scout: NYT list → eBay prices → scored deals ────────────────────────────
+// ─── Scout: NYT list → eBay prices → two-tier deals ─────────────────────────
 async function scoutCategory(catId) {
   const nytBooks = await fetchNYT(catId);
-
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const results = [];
+
+  const budgetCandidates  = [];
+  const premiumCandidates = [];
+
   for (const [i, book] of nytBooks.slice(0, 10).entries()) {
     if (i > 0) await sleep(400);
     const items = await fetchEbay(book.title);
-    const scored = items
-      .map(item => {
-        const priceStr = item.price?.value;
-        if (!priceStr) return null;
-        const price = parseFloat(priceStr);
-        if (price > 20) return null;
-        const condId = item.conditionId || "4000";
-        const condScore = { "1000": 5, "2500": 4, "3000": 3, "4000": 2 }[condId] || 1;
-        const priceScore = price <= 8 ? 5 : price <= 12 ? 4 : price <= 18 ? 3 : 2;
-        return {
-          title: toTitleCase(book.title),
-          author: book.author,
-          price: `$${price.toFixed(2)}`,
-          priceRaw: price,
-          condition: item.condition || "Used",
-          ebayUrl: item.itemWebUrl || "",
-          description: book.description || "",
-          dealScore: priceScore * 2 + condScore,
-          nytRank: book.rank,
-          nytWeeks: book.weeks_on_list,
-        };
-      })
-      .filter(Boolean);
-    results.push(scored.length ? scored.sort((a, b) => b.dealScore - a.dealScore)[0] : null);
+
+    const newItems    = items.filter(it => it.conditionId === "1000");
+    const usedItems   = items.filter(it => ["2500","3000","4000","5000"].includes(it.conditionId));
+    const minNewPrice = newItems.length
+      ? Math.min(...newItems.map(it => parseFloat(it.price?.value || "999")))
+      : null;
+
+    for (const item of usedItems) {
+      const priceStr = item.price?.value;
+      if (!priceStr) continue;
+      const price = parseFloat(priceStr);
+      if (price > 200 || !item.itemWebUrl?.includes("ebay.com")) continue;
+
+      const condId     = item.conditionId || "4000";
+      const condScore  = { "2500": 5, "3000": 4, "4000": 3, "5000": 2 }[condId] || 1;
+      const savingsVsNew = (minNewPrice && price < minNewPrice)
+        ? Math.round(((minNewPrice - price) / minNewPrice) * 100) : null;
+
+      const deal = {
+        title: toTitleCase(book.title),
+        author: book.author,
+        price: `$${price.toFixed(2)}`,
+        priceRaw: price,
+        condition: item.condition || "Used",
+        ebayUrl: item.itemWebUrl,
+        description: book.description || "",
+        nytRank: book.rank,
+        nytWeeks: book.weeks_on_list,
+        savingsVsNew,
+        newRefPrice: minNewPrice,
+      };
+
+      if (price <= 20) {
+        const priceScore = price <= 5 ? 5 : price <= 10 ? 4 : price <= 15 ? 3 : 2;
+        const gapBonus   = (savingsVsNew || 0) >= 50 ? 2 : (savingsVsNew || 0) >= 30 ? 1 : 0;
+        budgetCandidates.push({ ...deal, dealScore: priceScore * 2 + condScore + gapBonus });
+      }
+
+      if (price <= 200 && (savingsVsNew || 0) >= 20) {
+        const priceScore = price <= 30 ? 5 : price <= 60 ? 4 : price <= 100 ? 3 : 2;
+        const gapBonus   = (savingsVsNew || 0) >= 50 ? 3 : (savingsVsNew || 0) >= 30 ? 2 : 1;
+        premiumCandidates.push({ ...deal, dealScore: priceScore + condScore + gapBonus });
+      }
+    }
   }
 
-  const deals = results
-    .filter(d => d && d.dealScore >= 3 && d.ebayUrl.includes("ebay.com"))
-    .sort((a, b) => b.dealScore - a.dealScore)
-    .slice(0, 5);
+  const dedupe = arr => {
+    const seen = new Map();
+    for (const d of arr)
+      if (!seen.has(d.title) || d.dealScore > seen.get(d.title).dealScore) seen.set(d.title, d);
+    return [...seen.values()];
+  };
 
-  if (!deals.length) throw new Error("No deals found scoring 3+. Try again or check eBay inventory.");
-  return deals;
+  const budgetDeals  = dedupe(budgetCandidates)
+    .filter(d => d.dealScore >= 7)
+    .sort((a, b) => b.dealScore - a.dealScore)
+    .slice(0, 3);
+
+  const premiumDeals = dedupe(premiumCandidates)
+    .sort((a, b) => b.dealScore - a.dealScore)
+    .slice(0, 3);
+
+  if (!budgetDeals.length && !premiumDeals.length)
+    throw new Error("No deals found. Try again or check eBay inventory.");
+
+  return { budgetDeals, premiumDeals };
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -161,19 +198,25 @@ const DealCard = ({ deal, campid, catId, idx, onPost, schedDate }) => {
         </div>
         <div style={{ textAlign:"right", flexShrink:0 }}>
           <div style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:"1.5rem", fontWeight:900,
-            color:deal.priceRaw<=10?"#2a9d5c":deal.priceRaw<=15?"#f0c040":"#fff", lineHeight:1 }}>
+            color:deal.priceRaw<=10?"#2a9d5c":deal.priceRaw<=20?"#f0c040":"#fff", lineHeight:1 }}>
             {deal.price}
           </div>
-          <div style={{ fontFamily:"monospace", fontSize:"0.58rem", color:"#444", marginTop:1 }}>LIVE PRICE</div>
+          {deal.newRefPrice && (
+            <div style={{ fontFamily:"monospace", fontSize:"0.58rem", color:"#444", marginTop:1 }}>
+              new ${deal.newRefPrice.toFixed(2)}
+            </div>
+          )}
+          {!deal.newRefPrice && <div style={{ fontFamily:"monospace", fontSize:"0.58rem", color:"#444", marginTop:1 }}>LIVE PRICE</div>}
         </div>
       </div>
 
       {/* Badges */}
       <div style={{ display:"flex", gap:5, flexWrap:"wrap", alignItems:"center" }}>
-        {deal.priceRaw <= 10 && <Badge color="#2a9d5c">🔥 UNDER $10</Badge>}
-        {deal.priceRaw > 10 && deal.priceRaw <= 15 && <Badge color="#f0c040">GOOD PRICE</Badge>}
-        {deal.condition==="New" && <Badge color="#5fafff">NEW</Badge>}
+        {deal.savingsVsNew >= 50 && <Badge color="#2a9d5c">🔥 SAVE {deal.savingsVsNew}%</Badge>}
+        {deal.savingsVsNew >= 20 && deal.savingsVsNew < 50 && <Badge color="#f0c040">SAVE {deal.savingsVsNew}%</Badge>}
+        {!deal.savingsVsNew && deal.priceRaw <= 10 && <Badge color="#2a9d5c">🔥 UNDER $10</Badge>}
         {deal.condition==="Like New" && <Badge color="#5fafff">LIKE NEW</Badge>}
+        {deal.priceRaw > 20 && <Badge color="#9b6dff">PREMIUM</Badge>}
         {deal.nytWeeks >= 4 && <Badge color="#ff8c42">{deal.nytWeeks}WK ON LIST</Badge>}
         {schedDate && <span style={{ marginLeft:"auto", fontFamily:"monospace", fontSize:"0.62rem", color:"#3a3a3a" }}>📅 {fmtDate(schedDate)}</span>}
       </div>
@@ -291,12 +334,129 @@ const ExportPanel = ({ mgDeals, yaDeals, campid, onClose }) => {
   );
 };
 
+// ─── History page ─────────────────────────────────────────────────────────────
+const HistoryPage = ({ runs, onDelete, onBack, campid, onPost }) => {
+  const [expanded, setExpanded] = useState(null);
+  const cutoff = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000);
+  const recent = runs
+    .filter(r => new Date(r.date) > cutoff)
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#0d0d0d", color:"#fff", fontFamily:"Georgia,serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800;900&display=swap');
+        @keyframes fadeUp { from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none} }
+        * { box-sizing:border-box; }
+        button:hover{filter:brightness(1.1)}
+        ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-thumb{background:#2a2a2a}
+      `}</style>
+
+      <div style={{ background:"linear-gradient(135deg,#111,#1a1200)", borderBottom:"2px solid #f0c040", padding:"14px 18px" }}>
+        <div style={{ maxWidth:1100, margin:"0 auto", display:"flex", alignItems:"center", gap:14 }}>
+          <button onClick={onBack} style={{ background:"transparent", color:"#f0c040",
+            border:"1px solid #f0c04033", borderRadius:"3px", padding:"6px 12px",
+            fontFamily:"monospace", fontSize:"0.72rem", fontWeight:800, cursor:"pointer", whiteSpace:"nowrap" }}>
+            ← BACK
+          </button>
+          <div>
+            <h1 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:"clamp(1.2rem,3vw,1.7rem)",
+              fontWeight:900, margin:0, textTransform:"uppercase", letterSpacing:"0.05em" }}>
+              <span style={{ color:"#f0c040" }}>📋</span> Scout History
+            </h1>
+            <p style={{ margin:"2px 0 0", fontFamily:"monospace", fontSize:"0.62rem", color:"#555", letterSpacing:"0.07em" }}>
+              {recent.length} RUN{recent.length !== 1 ? "S" : ""} IN THE PAST 4 WEEKS
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth:1100, margin:"0 auto", padding:"16px 14px 60px" }}>
+        {recent.length === 0 ? (
+          <div style={{ padding:"56px 0", textAlign:"center", fontFamily:"monospace", fontSize:"0.75rem", color:"#333" }}>
+            No scout runs in the past 4 weeks.
+          </div>
+        ) : recent.map(run => {
+          const isOpen = expanded === run.id;
+          const d = new Date(run.date);
+          return (
+            <div key={run.id} style={{ background:"#111", border:"1px solid #1e1e1e",
+              borderRadius:"6px", marginBottom:10, overflow:"hidden", animation:"fadeUp 0.2s ease both" }}>
+
+              <div style={{ padding:"12px 16px", display:"flex", justifyContent:"space-between", alignItems:"center", gap:8 }}>
+                <div>
+                  <div style={{ fontFamily:"'Barlow Condensed',sans-serif", fontWeight:800,
+                    fontSize:"0.95rem", color:"#fff", textTransform:"uppercase" }}>
+                    {d.toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric", year:"numeric" })}
+                    <span style={{ marginLeft:8, fontFamily:"monospace", fontSize:"0.6rem",
+                      color:"#444", fontWeight:400, textTransform:"none" }}>
+                      {d.toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit" })}
+                    </span>
+                  </div>
+                  <div style={{ fontFamily:"monospace", fontSize:"0.65rem", color:"#555", marginTop:3 }}>
+                    🧩 {run.mgDeals.length} MG
+                    <span style={{ margin:"0 8px", color:"#2a2a2a" }}>·</span>
+                    ⚡ {run.yaDeals.length} YA
+                    <span style={{ margin:"0 8px", color:"#2a2a2a" }}>·</span>
+                    {run.mgDeals.length + run.yaDeals.length} total deals
+                  </div>
+                </div>
+                <div style={{ display:"flex", gap:6, flexShrink:0 }}>
+                  <button onClick={() => setExpanded(isOpen ? null : run.id)} style={{
+                    background: isOpen ? "#f0c04022" : "#1a1a1a",
+                    color: isOpen ? "#f0c040" : "#777",
+                    border: `1px solid ${isOpen ? "#f0c04044" : "#2a2a2a"}`,
+                    borderRadius:"3px", padding:"6px 12px",
+                    fontFamily:"monospace", fontSize:"0.67rem", fontWeight:800, cursor:"pointer" }}>
+                    {isOpen ? "▲ HIDE" : "▼ VIEW"}
+                  </button>
+                  <button onClick={() => onDelete(run.id)} style={{
+                    background:"transparent", color:"#3a3a3a",
+                    border:"1px solid #2a2a2a", borderRadius:"3px",
+                    padding:"6px 10px", fontSize:"0.8rem", cursor:"pointer" }}>
+                    🗑
+                  </button>
+                </div>
+              </div>
+
+              {isOpen && (
+                <div style={{ borderTop:"1px solid #1a1a1a", padding:"16px",
+                  display:"flex", gap:18, flexWrap:"wrap", alignItems:"flex-start" }}>
+                  {[{catId:"mg", deals:run.mgDeals, label:"Middle Grade", accent:"#f0c040", emoji:"🧩"},
+                    {catId:"ya", deals:run.yaDeals, label:"Young Adult",  accent:"#ff5f5f", emoji:"⚡"}
+                  ].map(({ catId, deals, label, accent, emoji }) => deals.length > 0 && (
+                    <div key={catId} style={{ flex:"1 1 340px", minWidth:0 }}>
+                      <div style={{ fontFamily:"'Barlow Condensed',sans-serif", fontWeight:900,
+                        fontSize:"0.85rem", textTransform:"uppercase", letterSpacing:"0.05em",
+                        color:accent, marginBottom:10, paddingBottom:6, borderBottom:`2px solid ${accent}22` }}>
+                        {emoji} {label} · {deals.length} deals
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+                        {deals.map((deal, i) => (
+                          <DealCard key={i} deal={deal} campid={campid}
+                            catId={catId} idx={i} onPost={onPost} />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function App() {
   const [campid,     setCampid]     = useState("");
   const [campSaved,  setCampSaved]  = useState(false);
-  const [mgDeals,    setMgDeals]    = useState([]);
-  const [yaDeals,    setYaDeals]    = useState([]);
+  const [mgBudget,   setMgBudget]   = useState([]);
+  const [mgPremium,  setMgPremium]  = useState([]);
+  const [yaBudget,   setYaBudget]   = useState([]);
+  const [yaPremium,  setYaPremium]  = useState([]);
   const [mgStatus,   setMgStatus]   = useState("idle");
   const [yaStatus,   setYaStatus]   = useState("idle");
   const [mgError,    setMgError]    = useState("");
@@ -305,6 +465,8 @@ export default function App() {
   const [nextPost,   setNextPost]   = useState(null);
   const [toast,      setToast]      = useState("");
   const [showExport, setShowExport] = useState(false);
+  const [runs,       setRuns]       = useState([]);
+  const [view,       setView]       = useState("main");
 
   useEffect(() => {
     try {
@@ -312,6 +474,8 @@ export default function App() {
       if (k) { setCampid(k); setCampSaved(true); }
       const h = localStorage.getItem("scout-history");
       if (h) { const v = JSON.parse(h); setPostHist(v); calcNext(v); }
+      const r = localStorage.getItem("scout-runs");
+      if (r) setRuns(JSON.parse(r));
     } catch {}
   }, []);
 
@@ -339,39 +503,66 @@ export default function App() {
   };
 
   const runScout = useCallback(async () => {
-    setMgDeals([]); setYaDeals([]);
+    setMgBudget([]); setMgPremium([]); setYaBudget([]); setYaPremium([]);
     setMgError(""); setYaError("");
     setMgStatus("loading"); setYaStatus("loading");
 
     const runCat = async (catId) => {
-      const setDeals  = catId==="mg" ? setMgDeals : setYaDeals;
-      const setStatus = catId==="mg" ? setMgStatus : setYaStatus;
-      const setError  = catId==="mg" ? setMgError  : setYaError;
+      const setBudget  = catId==="mg" ? setMgBudget  : setYaBudget;
+      const setPremium = catId==="mg" ? setMgPremium : setYaPremium;
+      const setStatus  = catId==="mg" ? setMgStatus  : setYaStatus;
+      const setError   = catId==="mg" ? setMgError   : setYaError;
       try {
-        const deals = await scoutCategory(catId);
-        if (!deals.length) throw new Error("No deals returned — Claude may not have found eBay listings. Try again.");
-        setDeals(deals);
+        const { budgetDeals, premiumDeals } = await scoutCategory(catId);
+        setBudget(budgetDeals);
+        setPremium(premiumDeals);
         setStatus("done");
+        return { budgetDeals, premiumDeals };
       } catch(e) {
         setError(e.message);
         setStatus("error");
+        return { budgetDeals: [], premiumDeals: [] };
       }
     };
 
-    await Promise.all([runCat("mg"), runCat("ya")]);
+    const [mgResult, yaResult] = await Promise.all([runCat("mg"), runCat("ya")]);
+    const allDeals = [
+      ...mgResult.budgetDeals, ...mgResult.premiumDeals,
+      ...yaResult.budgetDeals, ...yaResult.premiumDeals,
+    ];
+    if (allDeals.length) {
+      const run = {
+        id: Date.now(), date: new Date().toISOString(),
+        mgDeals: [...mgResult.budgetDeals, ...mgResult.premiumDeals],
+        yaDeals: [...yaResult.budgetDeals, ...yaResult.premiumDeals],
+      };
+      setRuns(prev => {
+        const updated = [run, ...prev].slice(0, 100);
+        try { localStorage.setItem("scout-runs", JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+    }
   }, []);
+
+  const deleteRun = (id) => {
+    setRuns(prev => {
+      const updated = prev.filter(r => r.id !== id);
+      try { localStorage.setItem("scout-runs", JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+  };
 
   const today      = new Date();
   const canPost    = !nextPost || today >= nextPost;
   const daysUntil  = nextPost ? Math.max(0, Math.ceil((nextPost-today)/86400000)) : 0;
-  const hasResults = mgDeals.length > 0 || yaDeals.length > 0;
+  const allDeals   = [...mgBudget, ...mgPremium, ...yaBudget, ...yaPremium];
+  const hasResults = allDeals.length > 0;
   const loading    = mgStatus==="loading" || yaStatus==="loading";
-  const totalPosts = (mgDeals.length + yaDeals.length) * 3;
-  const mgDates    = [0,2,4,6,8].map(n=>{const d=new Date(today);d.setDate(d.getDate()+n);return d;});
-  const yaDates    = [1,3,5,7,9].map(n=>{const d=new Date(today);d.setDate(d.getDate()+n);return d;});
+  const totalPosts = allDeals.length * 3;
 
-  const Section = ({ catId, deals, status, error, schedDates }) => {
+  const Section = ({ catId, budgetDeals, premiumDeals, status, error }) => {
     const cat = CATS.find(c=>c.id===catId);
+    const total = budgetDeals.length + premiumDeals.length;
     return (
       <div style={{ flex:"1 1 340px", minWidth:0 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12,
@@ -393,7 +584,7 @@ export default function App() {
           )}
           {status==="done" && (
             <span style={{ fontFamily:"monospace", fontSize:"0.6rem", color:"#2a9d5c" }}>
-              {deals.length} deals
+              {total} deals
             </span>
           )}
         </div>
@@ -408,26 +599,54 @@ export default function App() {
           </div>
         )}
 
-        {status==="loading" && !deals.length && (
+        {status==="loading" && !total && (
           <div style={{ padding:"28px 0", textAlign:"center" }}>
             <div style={{ fontFamily:"monospace", fontSize:"0.7rem", color:"#333", marginBottom:4 }}>
               Searching NYT list + eBay prices…
             </div>
             <div style={{ fontFamily:"monospace", fontSize:"0.62rem", color:"#222" }}>
-              This takes ~5–10 seconds
+              This takes ~15–20 seconds
             </div>
           </div>
         )}
 
-        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-          {deals.map((deal,i) => (
-            <DealCard key={i} deal={deal} campid={campid} catId={catId}
-              idx={i} onPost={markPosted} schedDate={schedDates[i]} />
-          ))}
-        </div>
+        {budgetDeals.length > 0 && (
+          <div style={{ marginBottom:18 }}>
+            <div style={{ fontFamily:"monospace", fontSize:"0.6rem", color:"#555",
+              letterSpacing:"0.1em", marginBottom:8, textTransform:"uppercase" }}>
+              💰 Budget Finds · Under $20
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+              {budgetDeals.map((deal,i) => (
+                <DealCard key={i} deal={deal} campid={campid} catId={catId}
+                  idx={i} onPost={markPosted} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {premiumDeals.length > 0 && (
+          <div>
+            <div style={{ fontFamily:"monospace", fontSize:"0.6rem", color:"#555",
+              letterSpacing:"0.1em", marginBottom:8, textTransform:"uppercase" }}>
+              ✨ Premium Picks · Under $200
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+              {premiumDeals.map((deal,i) => (
+                <DealCard key={i} deal={deal} campid={campid} catId={catId}
+                  idx={i} onPost={markPosted} />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   };
+
+  if (view === "history") return (
+    <HistoryPage runs={runs} onDelete={deleteRun}
+      onBack={() => setView("main")} campid={campid} onPost={markPosted} />
+  );
 
   return (
     <div style={{ minHeight:"100vh", background:"#0d0d0d", color:"#fff", fontFamily:"Georgia,serif" }}>
@@ -452,13 +671,21 @@ export default function App() {
               NYT BESTSELLERS → LIVE EBAY PRICES → EPN LINKS → BUFFER
             </p>
           </div>
-          <div style={{ background:canPost?"#0a1f12":"#1a1500",
-            border:`1px solid ${canPost?"#2a9d5c33":"#f0c04033"}`,
-            borderRadius:"5px", padding:"7px 12px", textAlign:"center" }}>
-            <div style={{ fontFamily:"monospace", fontSize:"0.58rem", color:"#555", letterSpacing:"0.1em" }}>NEXT POST</div>
-            <div style={{ fontFamily:"'Barlow Condensed',sans-serif", fontWeight:900,
-              fontSize:"0.9rem", color:canPost?"#2a9d5c":"#f0c040" }}>
-              {canPost ? "● TODAY" : `IN ${daysUntil}d`}
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <button onClick={() => setView("history")} style={{
+              background:"transparent", color:"#555", border:"1px solid #2a2a2a",
+              borderRadius:"3px", padding:"7px 12px", fontFamily:"monospace",
+              fontSize:"0.67rem", fontWeight:800, cursor:"pointer", whiteSpace:"nowrap" }}>
+              📋 HISTORY {runs.length > 0 && <span style={{ color:"#f0c040" }}>({runs.length})</span>}
+            </button>
+            <div style={{ background:canPost?"#0a1f12":"#1a1500",
+              border:`1px solid ${canPost?"#2a9d5c33":"#f0c04033"}`,
+              borderRadius:"5px", padding:"7px 12px", textAlign:"center" }}>
+              <div style={{ fontFamily:"monospace", fontSize:"0.58rem", color:"#555", letterSpacing:"0.1em" }}>NEXT POST</div>
+              <div style={{ fontFamily:"'Barlow Condensed',sans-serif", fontWeight:900,
+                fontSize:"0.9rem", color:canPost?"#2a9d5c":"#f0c040" }}>
+                {canPost ? "● TODAY" : `IN ${daysUntil}d`}
+              </div>
             </div>
           </div>
         </div>
@@ -513,7 +740,7 @@ export default function App() {
           {loading
             ? <><div style={{ width:13, height:13, border:"2px solid #2a2a2a",
                 borderTop:"2px solid #666", borderRadius:"50%", animation:"spin 0.7s linear infinite" }} />
-                SEARCHING NYT + EBAY (~10 SECONDS)…</>
+                SEARCHING NYT + EBAY (~20 SECONDS)…</>
             : "⚡ SCOUT: NYT BESTSELLERS → LIVE EBAY DEALS"}
         </button>
 
@@ -523,7 +750,7 @@ export default function App() {
             padding:"10px 14px", marginBottom:14,
             display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
             <div style={{ fontFamily:"monospace", fontSize:"0.67rem", color:"#555" }}>
-              {mgDeals.length+yaDeals.length} DEALS · 3 ANGLES ·{" "}
+              {allDeals.length} DEALS · 3 ANGLES ·{" "}
               <span style={{ color:"#f0c040" }}>{totalPosts} POSTS</span> · ~{totalPosts*2} DAYS
             </div>
             <button onClick={()=>setShowExport(true)} style={{ background:"#1e1e1e", color:"#f0c040",
@@ -536,8 +763,8 @@ export default function App() {
 
         {/* Results */}
         <div style={{ display:"flex", gap:18, flexWrap:"wrap", alignItems:"flex-start" }}>
-          <Section catId="mg" deals={mgDeals} status={mgStatus} error={mgError} schedDates={mgDates} />
-          <Section catId="ya" deals={yaDeals} status={yaStatus} error={yaError} schedDates={yaDates} />
+          <Section catId="mg" budgetDeals={mgBudget} premiumDeals={mgPremium} status={mgStatus} error={mgError} />
+          <Section catId="ya" budgetDeals={yaBudget} premiumDeals={yaPremium} status={yaStatus} error={yaError} />
         </div>
 
         {/* History */}
@@ -561,7 +788,7 @@ export default function App() {
       </div>
 
       {showExport && (
-        <ExportPanel mgDeals={mgDeals} yaDeals={yaDeals} campid={campid} onClose={()=>setShowExport(false)} />
+        <ExportPanel mgDeals={[...mgBudget,...mgPremium]} yaDeals={[...yaBudget,...yaPremium]} campid={campid} onClose={()=>setShowExport(false)} />
       )}
     </div>
   );
