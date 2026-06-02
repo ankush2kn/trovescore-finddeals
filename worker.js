@@ -66,10 +66,17 @@ export default {
       }
       try {
         const token = await getEbayToken(env);
+        const freeShipping = url.searchParams.get('freeShipping') === 'true';
+        const filter = [
+          'buyingOptions:{FIXED_PRICE}',
+          'price:[1..200]',
+          'priceCurrency:USD',
+          ...(freeShipping ? ['maxDeliveryCost:0'] : []),
+        ].join(',');
         const params = new URLSearchParams({
           q,
           category_ids: '267',
-          filter: 'buyingOptions:{FIXED_PRICE},price:[1..200],priceCurrency:USD',
+          filter,
           limit: '20',
           sort: 'bestMatch',
         });

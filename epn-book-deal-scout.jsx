@@ -15,10 +15,13 @@ const ANGLES = [
   { id:"social",  label:"📚 NYT List",     color:"#5fafff" },
   { id:"gift",    label:"🎁 Gift Angle",   color:"#ff8c42" },
 ];
-const WORKER           = import.meta.env.DEV ? "" : "https://finddeals.trovescore.com";
-const NYT_SCAN_LIMIT   = parseInt(import.meta.env.VITE_NYT_SCAN_LIMIT   || "10");
-const BUDGET_DEALS_MAX = parseInt(import.meta.env.VITE_BUDGET_DEALS_MAX || "3");
-const PREMIUM_DEALS_MAX= parseInt(import.meta.env.VITE_PREMIUM_DEALS_MAX|| "3");
+const WORKER             = import.meta.env.DEV ? "" : "https://finddeals.trovescore.com";
+const NYT_SCAN_LIMIT     = parseInt(import.meta.env.VITE_NYT_SCAN_LIMIT     || "10");
+const BUDGET_DEALS_MAX   = parseInt(import.meta.env.VITE_BUDGET_DEALS_MAX   || "3");
+const PREMIUM_DEALS_MAX  = parseInt(import.meta.env.VITE_PREMIUM_DEALS_MAX  || "3");
+const FREE_SHIPPING_ONLY = import.meta.env.VITE_FREE_SHIPPING_ONLY === "true";
+const MIN_SELLER_RATING  = parseFloat(import.meta.env.VITE_MIN_SELLER_RATING || "98");
+const MIN_SELLER_COUNT   = parseInt(import.meta.env.VITE_MIN_SELLER_COUNT   || "0");
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const buildEpnLink = (campid, url) =>
@@ -73,7 +76,8 @@ async function fetchNYT(catId) {
 
 async function fetchEbay(query) {
   let res;
-  try { res = await fetch(`${WORKER.replace(/\/$/, "")}/ebay?q=${encodeURIComponent(query)}`); }
+  const qs = new URLSearchParams({ q: query, ...(FREE_SHIPPING_ONLY ? { freeShipping: "true" } : {}) });
+  try { res = await fetch(`${WORKER.replace(/\/$/, "")}/ebay?${qs}`); }
   catch { return { items: [], tokensIn: 0, tokensOut: 0 }; }
   if (res.status === 401 || res.status === 403) {
     const err = await res.json().catch(() => ({}));
@@ -136,8 +140,10 @@ async function scoutCategory(catId, excludeTitles = new Set()) {
         const price = parseFloat(priceStr);
         if (price > 200 || !item.itemWebUrl?.includes("ebay.com")) continue;
 
-        const feedbackPct = parseFloat(item.seller?.feedbackPercentage);
-        if (!isNaN(feedbackPct) && feedbackPct < 98) continue;
+        const feedbackPct   = parseFloat(item.seller?.feedbackPercentage);
+        const feedbackScore = parseInt(item.seller?.feedbackScore || "0");
+        if (!isNaN(feedbackPct) && feedbackPct < MIN_SELLER_RATING) continue;
+        if (MIN_SELLER_COUNT > 0 && feedbackScore < MIN_SELLER_COUNT) continue;
 
         const condId    = item.conditionId || "4000";
         const condScore = { "2500": 5, "3000": 4, "4000": 3, "5000": 2 }[condId] || 1;
