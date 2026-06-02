@@ -389,10 +389,37 @@ const ExportPanel = ({ mgDeals, yaDeals, campid, onClose }) => {
 // ─── History page ─────────────────────────────────────────────────────────────
 const HistoryPage = ({ runs, onDelete, onBack, campid, onPost, postedUrls, onTogglePosted }) => {
   const [expanded, setExpanded] = useState(null);
+  const [tab, setTab] = useState("runs");
   const cutoff = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000);
   const recent = runs
     .filter(r => new Date(r.date) > cutoff)
     .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  // Collect all posted deals across all runs, deduped by ebayUrl
+  const postedDeals = (() => {
+    const seen = new Set();
+    const result = [];
+    for (const run of [...runs].sort((a, b) => new Date(b.date) - new Date(a.date))) {
+      for (const deal of [...(run.mgDeals || []), ...(run.yaDeals || [])]) {
+        if (deal.ebayUrl && postedUrls.has(deal.ebayUrl) && !seen.has(deal.ebayUrl)) {
+          seen.add(deal.ebayUrl);
+          result.push({ ...deal, _catId: (run.mgDeals || []).includes(deal) ? "mg" : "ya" });
+        }
+      }
+    }
+    return result;
+  })();
+
+  const Tab = ({ id, label, count }) => (
+    <button onClick={() => setTab(id)} style={{
+      background: tab === id ? "#f0c04022" : "transparent",
+      color: tab === id ? "#f0c040" : "#555",
+      border: `1px solid ${tab === id ? "#f0c04044" : "#2a2a2a"}`,
+      borderRadius:"3px", padding:"6px 14px", fontFamily:"monospace",
+      fontSize:"0.7rem", fontWeight:800, cursor:"pointer", letterSpacing:"0.05em" }}>
+      {label} {count !== undefined && <span style={{ opacity:0.6 }}>({count})</span>}
+    </button>
+  );
 
   return (
     <div style={{ minHeight:"100vh", background:"#0d0d0d", color:"#fff", fontFamily:"Georgia,serif" }}>
@@ -405,26 +432,46 @@ const HistoryPage = ({ runs, onDelete, onBack, campid, onPost, postedUrls, onTog
       `}</style>
 
       <div style={{ background:"linear-gradient(135deg,#111,#1a1200)", borderBottom:"2px solid #f0c040", padding:"14px 18px" }}>
-        <div style={{ maxWidth:1100, margin:"0 auto", display:"flex", alignItems:"center", gap:14 }}>
+        <div style={{ maxWidth:1100, margin:"0 auto", display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
           <button onClick={onBack} style={{ background:"transparent", color:"#f0c040",
             border:"1px solid #f0c04033", borderRadius:"3px", padding:"6px 12px",
             fontFamily:"monospace", fontSize:"0.72rem", fontWeight:800, cursor:"pointer", whiteSpace:"nowrap" }}>
             ← BACK
           </button>
-          <div>
+          <div style={{ flex:1 }}>
             <h1 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:"clamp(1.2rem,3vw,1.7rem)",
               fontWeight:900, margin:0, textTransform:"uppercase", letterSpacing:"0.05em" }}>
               <span style={{ color:"#f0c040" }}>📋</span> Scout History
             </h1>
-            <p style={{ margin:"2px 0 0", fontFamily:"monospace", fontSize:"0.62rem", color:"#555", letterSpacing:"0.07em" }}>
-              {recent.length} RUN{recent.length !== 1 ? "S" : ""} IN THE PAST 4 WEEKS
-            </p>
+          </div>
+          <div style={{ display:"flex", gap:6 }}>
+            <Tab id="runs"   label="Scout Runs"  count={recent.length} />
+            <Tab id="posted" label="Posted to X" count={postedDeals.length} />
           </div>
         </div>
       </div>
 
       <div style={{ maxWidth:1100, margin:"0 auto", padding:"16px 14px 60px" }}>
-        {recent.length === 0 ? (
+
+        {/* ── Posted to X tab ─────────────────────────────────────────────── */}
+        {tab === "posted" && (
+          postedDeals.length === 0 ? (
+            <div style={{ padding:"56px 0", textAlign:"center", fontFamily:"monospace", fontSize:"0.75rem", color:"#333" }}>
+              No deals marked as posted yet.
+            </div>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+              {postedDeals.map((deal, i) => (
+                <DealCard key={deal.ebayUrl} deal={deal} campid={campid}
+                  catId={deal._catId} idx={i} onPost={onPost}
+                  isPosted={true} onTogglePosted={onTogglePosted} />
+              ))}
+            </div>
+          )
+        )}
+
+        {/* ── Scout Runs tab ──────────────────────────────────────────────── */}
+        {tab === "runs" && (recent.length === 0 ? (
           <div style={{ padding:"56px 0", textAlign:"center", fontFamily:"monospace", fontSize:"0.75rem", color:"#333" }}>
             No scout runs in the past 4 weeks.
           </div>
@@ -451,6 +498,13 @@ const HistoryPage = ({ runs, onDelete, onBack, campid, onPost, postedUrls, onTog
                     ⚡ {run.yaDeals.length} YA
                     <span style={{ margin:"0 8px", color:"#2a2a2a" }}>·</span>
                     {run.mgDeals.length + run.yaDeals.length} total deals
+                    {(() => {
+                      const n = [...(run.mgDeals||[]), ...(run.yaDeals||[])].filter(d => postedUrls.has(d.ebayUrl)).length;
+                      return n > 0 && <>
+                        <span style={{ margin:"0 8px", color:"#2a2a2a" }}>·</span>
+                        <span style={{ color:"#2a9d5c" }}>✓ {n} posted</span>
+                      </>;
+                    })()}
                     {(run.tokensIn > 0 || run.tokensOut > 0) && (<>
                       <span style={{ margin:"0 8px", color:"#2a2a2a" }}>·</span>
                       <span title="LLM tokens used">
@@ -502,7 +556,7 @@ const HistoryPage = ({ runs, onDelete, onBack, campid, onPost, postedUrls, onTog
               )}
             </div>
           );
-        })}
+        }))}
       </div>
     </div>
   );
