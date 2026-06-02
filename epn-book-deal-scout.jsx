@@ -3,12 +3,12 @@ import { useState, useEffect, useCallback } from "react";
 // ─── Constants ────────────────────────────────────────────────────────────────
 const EPN_TRACKING = "mkcid=1&mkrid=711-53200-19255-0&siteid=0&toolid=10001&mkevt=1";
 const CATS = [
-  { id:"mg", label:"Middle Grade", age:"ages 8–12",  ageShort:"kids 8–12",  emoji:"🧩", accent:"#f0c040" },
-  { id:"ya", label:"Young Adult",  age:"teens 13–18", ageShort:"teens 13–18", emoji:"⚡", accent:"#ff5f5f" },
+  { id:"mg", label:"Middle Grade",   age:"ages 8–12",  ageShort:"kids 8–12", emoji:"🧩", accent:"#f0c040" },
+  { id:"ya", label:"Adult Fiction",  age:"fiction",    ageShort:"readers",   emoji:"📖", accent:"#ff5f5f" },
 ];
 const TAGS = {
   mg:"#BookDeals #MiddleGrade #KidsBooks #eBayFinds",
-  ya:"#BookDeals #YABooks #TeenReads #eBayFinds",
+  ya:"#BookDeals #FictionDeals #Bookstagram #eBayFinds",
 };
 const ANGLES = [
   { id:"urgency", label:"⚡ Price Drop",   color:"#f0c040" },
@@ -45,11 +45,11 @@ const buildTweet = (deal, angleId, catId, campid) => {
 // ─── Worker fetch helpers ─────────────────────────────────────────────────────
 const toTitleCase = s => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
 
-const NYT_LIST = { mg: "middle-grade", ya: "young-adult" };
+const NYT_LIST = { mg: "middle-grade", ya: "hardcover-fiction" };
 
 async function fetchNYT(catId) {
   const base = WORKER.replace(/\/$/, "");
-  const list = NYT_LIST[catId] || "young-adult";
+  const list = NYT_LIST[catId] || "hardcover-fiction";
   let res;
   try { res = await fetch(`${base}/nyt?list=${list}`); }
   catch { throw new Error("Cannot reach worker. Check the WORKER URL."); }
@@ -118,9 +118,9 @@ async function scoutCategory(catId, excludeTitles = new Set()) {
 
       const newItems    = items.filter(it => it.conditionId === "1000");
       const usedItems   = items.filter(it => ["2500","3000","4000","5000"].includes(it.conditionId));
-      const minNewPrice = newItems.length
-        ? Math.min(...newItems.map(it => parseFloat(it.price?.value || "999")))
-        : null;
+      // Require ≥2 new listings so a single outlier seller can't skew the reference price
+      const newPrices   = newItems.map(it => parseFloat(it.price?.value || "0")).filter(p => p > 0);
+      const minNewPrice = newPrices.length >= 2 ? Math.min(...newPrices) : null;
 
       for (const item of usedItems) {
         const priceStr = item.price?.value;

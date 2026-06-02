@@ -41,8 +41,8 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/nyt') {
-      const category = url.searchParams.get('category') || 'ya';
-      const nytUrl = `https://api.nytimes.com/svc/books/v3/lists/overview.json?api-key=${env.NYT_API_KEY}`;
+      const list = url.searchParams.get('list') || 'hardcover-fiction';
+      const nytUrl = `https://api.nytimes.com/svc/books/v3/lists/current/${list}.json?api-key=${env.NYT_API_KEY}`;
       try {
         const res = await fetch(nytUrl);
         if (!res.ok) {
@@ -53,23 +53,7 @@ export default {
           );
         }
         const data = await res.json();
-        const keywords = category === 'ya'
-          ? ['young adult']
-          : ['middle grade', 'children'];
-        const seen = new Set();
-        const books = [];
-        for (const list of (data.results?.lists || [])) {
-          const name = (list.display_name || '').toLowerCase();
-          if (keywords.some(kw => name.includes(kw))) {
-            for (const book of (list.books || [])) {
-              if (!seen.has(book.title)) {
-                seen.add(book.title);
-                books.push(book);
-              }
-            }
-          }
-        }
-        return new Response(JSON.stringify({ results: { books } }), { headers: CORS });
+        return new Response(JSON.stringify(data), { headers: CORS });
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: CORS });
       }
@@ -86,7 +70,7 @@ export default {
           q,
           category_ids: '267',
           filter: 'buyingOptions:{FIXED_PRICE},price:[1..200],priceCurrency:USD',
-          limit: '10',
+          limit: '20',
           sort: 'bestMatch',
         });
         const res = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`, {
