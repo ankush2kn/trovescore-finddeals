@@ -48,30 +48,22 @@ const buildTweet = (deal, angleId, catId, campid) => {
 // ─── Worker fetch helpers ─────────────────────────────────────────────────────
 const toTitleCase = s => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
 
-const NYT_LISTS = {
-  mg: ["middle-grade-hardcover", "childrens-middle-grade", "chapter-books"],
-  ya: ["hardcover-fiction"],
-};
+const NYT_LIST = { mg: "middle-grade", ya: "hardcover-fiction" };
 
 async function fetchNYT(catId) {
   const base = WORKER.replace(/\/$/, "");
-  const candidates = NYT_LISTS[catId] || NYT_LISTS.ya;
-  let lastError = "";
-  for (const list of candidates) {
-    let res;
-    try { res = await fetch(`${base}/nyt?list=${list}`); }
-    catch { throw new Error("Cannot reach worker. Check the WORKER URL."); }
-    if (res.status === 401 || res.status === 403) {
-      throw new Error(`NYT API key rejected (${res.status}). Set NYT_API_KEY in Cloudflare Worker secrets.`);
-    }
-    if (res.status === 404) { lastError = `NYT list "${list}" not found`; continue; }
-    if (!res.ok) { lastError = `NYT API error ${res.status} for list "${list}"`; continue; }
-    const data = await res.json();
-    const books = data.results?.books;
-    if (books?.length) return books;
-    lastError = `No books returned for list "${list}"`;
+  const list = NYT_LIST[catId] || "hardcover-fiction";
+  let res;
+  try { res = await fetch(`${base}/nyt?list=${list}`); }
+  catch { throw new Error("Cannot reach worker. Check the WORKER URL."); }
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(`NYT API key rejected (${res.status}). Set NYT_API_KEY in Cloudflare Worker secrets.`);
   }
-  throw new Error(`No NYT books found. Tried: ${candidates.join(", ")}. Last error: ${lastError}`);
+  if (!res.ok) throw new Error(`NYT API error ${res.status}.`);
+  const data = await res.json();
+  const books = data.results?.books;
+  if (!books?.length) throw new Error("No books found on NYT list.");
+  return books;
 }
 
 async function fetchEbay(query) {

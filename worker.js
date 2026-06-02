@@ -42,18 +42,37 @@ export default {
 
     if (url.pathname === '/nyt') {
       const list = url.searchParams.get('list') || 'hardcover-fiction';
-      const nytUrl = `https://api.nytimes.com/svc/books/v3/lists/current/${list}.json?api-key=${env.NYT_API_KEY}`;
+      const isMG = list.includes('middle-grade') || list.includes('children');
       try {
-        const res = await fetch(nytUrl);
-        if (!res.ok) {
-          const body = await res.text();
-          return new Response(
-            JSON.stringify({ error: `NYT API ${res.status}`, detail: body.slice(0, 200) }),
-            { status: res.status, headers: CORS }
-          );
+        if (isMG) {
+          // Use overview endpoint + keyword matching — specific MG list slugs are unreliable
+          const res = await fetch(`https://api.nytimes.com/svc/books/v3/lists/overview.json?api-key=${env.NYT_API_KEY}`);
+          if (!res.ok) {
+            const body = await res.text();
+            return new Response(JSON.stringify({ error: `NYT API ${res.status}`, detail: body.slice(0, 200) }), { status: res.status, headers: CORS });
+          }
+          const data = await res.json();
+          const seen = new Set();
+          const books = [];
+          for (const l of (data.results?.lists || [])) {
+            const name = (l.display_name || '').toLowerCase();
+            if (name.includes('middle grade') || name.includes('children')) {
+              for (const book of (l.books || [])) {
+                if (!seen.has(book.title)) { seen.add(book.title); books.push(book); }
+              }
+            }
+          }
+          return new Response(JSON.stringify({ results: { books } }), { headers: CORS });
+        } else {
+          // Direct list endpoint for well-known slugs like hardcover-fiction
+          const res = await fetch(`https://api.nytimes.com/svc/books/v3/lists/current/${list}.json?api-key=${env.NYT_API_KEY}`);
+          if (!res.ok) {
+            const body = await res.text();
+            return new Response(JSON.stringify({ error: `NYT API ${res.status}`, detail: body.slice(0, 200) }), { status: res.status, headers: CORS });
+          }
+          const data = await res.json();
+          return new Response(JSON.stringify(data), { headers: CORS });
         }
-        const data = await res.json();
-        return new Response(JSON.stringify(data), { headers: CORS });
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: CORS });
       }
