@@ -550,6 +550,8 @@ export default function App() {
     ]);
     yaResult.budgetDeals  = yaResult.budgetDeals.filter(d => !mgTitles.has(d.title.toLowerCase()));
     yaResult.premiumDeals = yaResult.premiumDeals.filter(d => !mgTitles.has(d.title.toLowerCase()));
+    setYaBudget(yaResult.budgetDeals);
+    setYaPremium(yaResult.premiumDeals);
 
     const allDeals = [
       ...mgResult.budgetDeals, ...mgResult.premiumDeals,
