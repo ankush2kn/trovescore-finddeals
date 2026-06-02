@@ -81,67 +81,17 @@ async function fetchEbay(query) {
 }
 
 // ─── Scout: NYT list → eBay prices → two-tier deals ─────────────────────────
-async function scoutCategory(catId) {
+async function scoutCategory(catId, excludeTitles = new Set()) {
   const nytBooks = await fetchNYT(catId);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // Filter out titles already claimed by the other category
+  const eligible = nytBooks.filter(b => !excludeTitles.has(toTitleCase(b.title).toLowerCase()));
 
   const budgetCandidates  = [];
   const premiumCandidates = [];
   let totalTokensIn = 0, totalTokensOut = 0;
-
-  for (const [i, book] of nytBooks.slice(0, NYT_SCAN_LIMIT).entries()) {
-    if (i > 0) await sleep(400);
-    const { items, tokensIn, tokensOut } = await fetchEbay(book.title);
-    totalTokensIn  += tokensIn;
-    totalTokensOut += tokensOut;
-
-    const newItems    = items.filter(it => it.conditionId === "1000");
-    const usedItems   = items.filter(it => ["2500","3000","4000","5000"].includes(it.conditionId));
-    const minNewPrice = newItems.length
-      ? Math.min(...newItems.map(it => parseFloat(it.price?.value || "999")))
-      : null;
-
-    for (const item of usedItems) {
-      const priceStr = item.price?.value;
-      if (!priceStr) continue;
-      const price = parseFloat(priceStr);
-      if (price > 200 || !item.itemWebUrl?.includes("ebay.com")) continue;
-
-      const feedbackPct = parseFloat(item.seller?.feedbackPercentage);
-      if (!isNaN(feedbackPct) && feedbackPct < 98) continue;
-
-      const condId     = item.conditionId || "4000";
-      const condScore  = { "2500": 5, "3000": 4, "4000": 3, "5000": 2 }[condId] || 1;
-      const savingsVsNew = (minNewPrice && price < minNewPrice)
-        ? Math.round(((minNewPrice - price) / minNewPrice) * 100) : null;
-
-      const deal = {
-        title: toTitleCase(book.title),
-        author: book.author,
-        price: `$${price.toFixed(2)}`,
-        priceRaw: price,
-        condition: item.condition || "Used",
-        ebayUrl: item.itemWebUrl,
-        description: book.description || "",
-        nytRank: book.rank,
-        nytWeeks: book.weeks_on_list,
-        savingsVsNew,
-        newRefPrice: minNewPrice,
-      };
-
-      if (price <= 20) {
-        const priceScore = price <= 5 ? 5 : price <= 10 ? 4 : price <= 15 ? 3 : 2;
-        const gapBonus   = (savingsVsNew || 0) >= 50 ? 2 : (savingsVsNew || 0) >= 30 ? 1 : 0;
-        budgetCandidates.push({ ...deal, dealScore: priceScore * 2 + condScore + gapBonus });
-      }
-
-      if (price > 20 && price <= 200 && (savingsVsNew || 0) >= 20) {
-        const priceScore = price <= 30 ? 5 : price <= 60 ? 4 : price <= 100 ? 3 : 2;
-        const gapBonus   = (savingsVsNew || 0) >= 50 ? 3 : (savingsVsNew || 0) >= 30 ? 2 : 1;
-        premiumCandidates.push({ ...deal, dealScore: priceScore + condScore + gapBonus });
-      }
-    }
-  }
+  let callCount = 0;
 
   const dedupe = arr => {
     const seen = new Map();
@@ -149,6 +99,73 @@ async function scoutCategory(catId) {
       if (!seen.has(d.title) || d.dealScore > seen.get(d.title).dealScore) seen.set(d.title, d);
     return [...seen.values()];
   };
+
+  const enoughDeals = () => {
+    const bd = dedupe(budgetCandidates).filter(d => d.dealScore >= 7).slice(0, BUDGET_DEALS_MAX);
+    const pd = dedupe(premiumCandidates).slice(0, PREMIUM_DEALS_MAX);
+    return bd.length + pd.length >= BUDGET_DEALS_MAX + PREMIUM_DEALS_MAX;
+  };
+
+  // Scan eligible books in batches of NYT_SCAN_LIMIT; expand to next batch if needed
+  for (let batchStart = 0; batchStart < eligible.length; batchStart += NYT_SCAN_LIMIT) {
+    const batch = eligible.slice(batchStart, batchStart + NYT_SCAN_LIMIT);
+
+    for (const book of batch) {
+      if (callCount++ > 0) await sleep(400);
+      const { items, tokensIn, tokensOut } = await fetchEbay(book.title);
+      totalTokensIn  += tokensIn;
+      totalTokensOut += tokensOut;
+
+      const newItems    = items.filter(it => it.conditionId === "1000");
+      const usedItems   = items.filter(it => ["2500","3000","4000","5000"].includes(it.conditionId));
+      const minNewPrice = newItems.length
+        ? Math.min(...newItems.map(it => parseFloat(it.price?.value || "999")))
+        : null;
+
+      for (const item of usedItems) {
+        const priceStr = item.price?.value;
+        if (!priceStr) continue;
+        const price = parseFloat(priceStr);
+        if (price > 200 || !item.itemWebUrl?.includes("ebay.com")) continue;
+
+        const feedbackPct = parseFloat(item.seller?.feedbackPercentage);
+        if (!isNaN(feedbackPct) && feedbackPct < 98) continue;
+
+        const condId    = item.conditionId || "4000";
+        const condScore = { "2500": 5, "3000": 4, "4000": 3, "5000": 2 }[condId] || 1;
+        const savingsVsNew = (minNewPrice && price < minNewPrice)
+          ? Math.round(((minNewPrice - price) / minNewPrice) * 100) : null;
+
+        const deal = {
+          title: toTitleCase(book.title),
+          author: book.author,
+          price: `$${price.toFixed(2)}`,
+          priceRaw: price,
+          condition: item.condition || "Used",
+          ebayUrl: item.itemWebUrl,
+          description: book.description || "",
+          nytRank: book.rank,
+          nytWeeks: book.weeks_on_list,
+          savingsVsNew,
+          newRefPrice: minNewPrice,
+        };
+
+        if (price <= 20) {
+          const priceScore = price <= 5 ? 5 : price <= 10 ? 4 : price <= 15 ? 3 : 2;
+          const gapBonus   = (savingsVsNew || 0) >= 50 ? 2 : (savingsVsNew || 0) >= 30 ? 1 : 0;
+          budgetCandidates.push({ ...deal, dealScore: priceScore * 2 + condScore + gapBonus });
+        }
+
+        if (price > 20 && price <= 200 && (savingsVsNew || 0) >= 20) {
+          const priceScore = price <= 30 ? 5 : price <= 60 ? 4 : price <= 100 ? 3 : 2;
+          const gapBonus   = (savingsVsNew || 0) >= 50 ? 3 : (savingsVsNew || 0) >= 30 ? 2 : 1;
+          premiumCandidates.push({ ...deal, dealScore: priceScore + condScore + gapBonus });
+        }
+      }
+    }
+
+    if (enoughDeals()) break; // got what we need — don't scan further
+  }
 
   const budgetDeals  = dedupe(budgetCandidates)
     .filter(d => d.dealScore >= 7)
@@ -523,47 +540,44 @@ export default function App() {
     setMgError(""); setYaError("");
     setMgStatus("loading"); setYaStatus("loading");
 
-    const runCat = async (catId) => {
-      const setBudget  = catId==="mg" ? setMgBudget  : setYaBudget;
-      const setPremium = catId==="mg" ? setMgPremium : setYaPremium;
-      const setStatus  = catId==="mg" ? setMgStatus  : setYaStatus;
-      const setError   = catId==="mg" ? setMgError   : setYaError;
-      try {
-        const { budgetDeals, premiumDeals, tokensIn, tokensOut } = await scoutCategory(catId);
-        setBudget(budgetDeals);
-        setPremium(premiumDeals);
-        setStatus("done");
-        return { budgetDeals, premiumDeals, tokensIn, tokensOut };
-      } catch(e) {
-        setError(e.message);
-        setStatus("error");
-        return { budgetDeals: [], premiumDeals: [], tokensIn: 0, tokensOut: 0 };
-      }
-    };
+    // ── Step 1: scout MG ──────────────────────────────────────────────────────
+    let mgBudgetDeals = [], mgPremiumDeals = [], mgTokIn = 0, mgTokOut = 0;
+    try {
+      const r = await scoutCategory("mg");
+      mgBudgetDeals = r.budgetDeals; mgPremiumDeals = r.premiumDeals;
+      mgTokIn = r.tokensIn; mgTokOut = r.tokensOut;
+      setMgBudget(mgBudgetDeals); setMgPremium(mgPremiumDeals);
+      setMgStatus("done");
+    } catch(e) {
+      setMgError(e.message); setMgStatus("error");
+    }
 
-    const [mgResult, yaResult] = await Promise.all([runCat("mg"), runCat("ya")]);
-
-    // Remove any YA book that already appears in MG (by title)
-    const mgTitles = new Set([
-      ...mgResult.budgetDeals.map(d => d.title.toLowerCase()),
-      ...mgResult.premiumDeals.map(d => d.title.toLowerCase()),
+    // ── Step 2: scout YA, excluding MG-selected titles ────────────────────────
+    const mgSelectedTitles = new Set([
+      ...mgBudgetDeals.map(d => d.title.toLowerCase()),
+      ...mgPremiumDeals.map(d => d.title.toLowerCase()),
     ]);
-    yaResult.budgetDeals  = yaResult.budgetDeals.filter(d => !mgTitles.has(d.title.toLowerCase()));
-    yaResult.premiumDeals = yaResult.premiumDeals.filter(d => !mgTitles.has(d.title.toLowerCase()));
-    setYaBudget(yaResult.budgetDeals);
-    setYaPremium(yaResult.premiumDeals);
 
-    const allDeals = [
-      ...mgResult.budgetDeals, ...mgResult.premiumDeals,
-      ...yaResult.budgetDeals, ...yaResult.premiumDeals,
-    ];
+    let yaBudgetDeals = [], yaPremiumDeals = [], yaTokIn = 0, yaTokOut = 0;
+    try {
+      const r = await scoutCategory("ya", mgSelectedTitles);
+      yaBudgetDeals = r.budgetDeals; yaPremiumDeals = r.premiumDeals;
+      yaTokIn = r.tokensIn; yaTokOut = r.tokensOut;
+      setYaBudget(yaBudgetDeals); setYaPremium(yaPremiumDeals);
+      setYaStatus("done");
+    } catch(e) {
+      setYaError(e.message); setYaStatus("error");
+    }
+
+    // ── Step 3: save run history ──────────────────────────────────────────────
+    const allDeals = [...mgBudgetDeals, ...mgPremiumDeals, ...yaBudgetDeals, ...yaPremiumDeals];
     if (allDeals.length) {
       const run = {
         id: Date.now(), date: new Date().toISOString(),
-        mgDeals: [...mgResult.budgetDeals, ...mgResult.premiumDeals],
-        yaDeals: [...yaResult.budgetDeals, ...yaResult.premiumDeals],
-        tokensIn:  (mgResult.tokensIn  || 0) + (yaResult.tokensIn  || 0),
-        tokensOut: (mgResult.tokensOut || 0) + (yaResult.tokensOut || 0),
+        mgDeals: [...mgBudgetDeals, ...mgPremiumDeals],
+        yaDeals: [...yaBudgetDeals, ...yaPremiumDeals],
+        tokensIn:  mgTokIn + yaTokIn,
+        tokensOut: mgTokOut + yaTokOut,
       };
       setRuns(prev => {
         const updated = [run, ...prev].slice(0, 100);
