@@ -473,8 +473,7 @@ const HistoryPage = ({ runs, onDelete, onBack, campid, onPost }) => {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [campid,     setCampid]     = useState("");
-  const [campSaved,  setCampSaved]  = useState(false);
+  const campid = import.meta.env.VITE_EPN_CAMPID ?? "";
   const [mgBudget,   setMgBudget]   = useState([]);
   const [mgPremium,  setMgPremium]  = useState([]);
   const [yaBudget,   setYaBudget]   = useState([]);
@@ -492,8 +491,6 @@ export default function App() {
 
   useEffect(() => {
     try {
-      const k = localStorage.getItem("scout-campid");
-      if (k) { setCampid(k); setCampSaved(true); }
       const h = localStorage.getItem("scout-history");
       if (h) { const v = JSON.parse(h); setPostHist(v); calcNext(v); }
       const r = localStorage.getItem("scout-runs");
@@ -509,12 +506,6 @@ export default function App() {
   };
 
   const flash = msg => { setToast(msg); setTimeout(()=>setToast(""),3500); };
-
-  const saveCampid = async () => {
-    if (!campid.trim()) return;
-    try { localStorage.setItem("scout-campid", campid.trim()); } catch {}
-    setCampSaved(true); flash("EPN Campaign ID saved ✓");
-  };
 
   const markPosted = async (deal) => {
     const entry = { title:deal.title, price:deal.price, date:new Date().toISOString() };
@@ -724,37 +715,19 @@ export default function App() {
           </div>
         )}
 
-        {/* EPN Campaign ID */}
-        <div style={{ background:"#111", border:`1px solid ${campSaved?"#1e1e1e":"#f0c04033"}`,
-          borderRadius:"6px", padding:"12px 16px", marginBottom:14,
-          display:"flex", gap:10, alignItems:"flex-end", flexWrap:"wrap" }}>
-          <div style={{ flex:1, minWidth:200 }}>
-            <label style={{ display:"block", fontFamily:"monospace", fontSize:"0.62rem",
-              color:"#555", letterSpacing:"0.1em", marginBottom:4 }}>
-              EPN CAMPAIGN ID {campSaved && <span style={{ color:"#2a9d5c" }}>✓ SAVED</span>}
-            </label>
-            <input value={campid} onChange={e=>{setCampid(e.target.value);setCampSaved(false);}}
-              placeholder="5338XXXXXXXXXX"
-              style={{ width:"100%", background:"#0d0d0d", border:"1px solid #2a2a2a",
-                color:"#fff", padding:"7px 11px", borderRadius:"3px",
-                fontFamily:"monospace", fontSize:"0.82rem" }} />
-          </div>
-          <button onClick={saveCampid} style={{ background:"#f0c040", color:"#0d0d0d", border:"none",
-            borderRadius:"3px", padding:"7px 14px", fontFamily:"monospace", fontWeight:800,
-            fontSize:"0.72rem", cursor:"pointer", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>
-            SAVE
-          </button>
-          {!campSaved && (
-            <span style={{ fontFamily:"monospace", fontSize:"0.62rem", color:"#ff5f5f", alignSelf:"center" }}>
-              ⚠ Add your EPN ID for affiliate links
-            </span>
-          )}
+        {/* EPN ID indicator */}
+        <div style={{ fontFamily:"monospace", fontSize:"0.67rem", color:"#444",
+          marginBottom:10, letterSpacing:"0.08em" }}>
+          EPN CAMPAIGN ID:&nbsp;
+          {campid
+            ? <span style={{ color:"#2a9d5c" }}>{campid}</span>
+            : <span style={{ color:"#ff5f5f" }}>⚠ NOT SET — affiliate links disabled</span>}
         </div>
 
         {/* Scout button */}
         <button onClick={runScout} disabled={loading} style={{
-          width:"100%", padding:"13px", marginBottom:14,
-          fontFamily:"'Barlow Condensed',sans-serif", fontWeight:900, fontSize:"1rem",
+          padding:"8px 18px", marginBottom:14,
+          fontFamily:"'Barlow Condensed',sans-serif", fontWeight:900, fontSize:"0.82rem",
           textTransform:"uppercase", letterSpacing:"0.08em",
           background:loading?"#1a1a1a":"linear-gradient(90deg,#f0c040,#ff5f5f)",
           color:loading?"#2a2a2a":"#0d0d0d", border:"none", borderRadius:"4px",
