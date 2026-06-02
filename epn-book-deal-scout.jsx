@@ -208,16 +208,16 @@ const CopyBtn = ({ text }) => {
   );
 };
 
-const DealCard = ({ deal, campid, catId, idx, onPost, schedDate }) => {
+const DealCard = ({ deal, campid, catId, idx, onPost, schedDate, isPosted, onTogglePosted }) => {
   const [angle, setAngle] = useState("urgency");
   const tweet = buildTweet(deal, angle, catId, campid);
   const body  = tweet.split("\n").slice(0, -2).join("\n");
   const link  = campid && deal.ebayUrl ? buildEpnLink(campid, deal.ebayUrl) : deal.ebayUrl;
 
   return (
-    <div style={{ background:"#141414", border:`1px solid ${idx===0?"#f0c04033":"#1e1e1e"}`,
+    <div style={{ background:"#141414", border:`1px solid ${isPosted?"#2a9d5c44":idx===0?"#f0c04033":"#1e1e1e"}`,
       borderRadius:"6px", padding:"16px", display:"flex", flexDirection:"column", gap:11,
-      animation:`fadeUp 0.3s ease ${idx*0.05}s both` }}>
+      animation:`fadeUp 0.3s ease ${idx*0.05}s both`, opacity:isPosted?0.55:1 }}>
 
       {/* Header */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8 }}>
@@ -229,6 +229,13 @@ const DealCard = ({ deal, campid, catId, idx, onPost, schedDate }) => {
               fontWeight:800, color:"#fff", textTransform:"uppercase", lineHeight:1.2 }}>
               {deal.title}
             </div>
+            {isPosted && (
+              <span style={{ background:"#2a9d5c22", color:"#2a9d5c", border:"1px solid #2a9d5c44",
+                fontFamily:"monospace", fontSize:"0.55rem", fontWeight:800, padding:"2px 6px",
+                borderRadius:"2px", letterSpacing:"0.07em", whiteSpace:"nowrap" }}>
+                ✓ POSTED
+              </span>
+            )}
           </div>
           <div style={{ fontFamily:"monospace", fontSize:"0.67rem", color:"#555" }}>
             {deal.author} · {deal.condition}
@@ -306,11 +313,14 @@ const DealCard = ({ deal, campid, catId, idx, onPost, schedDate }) => {
             🔗 Verify on eBay
           </a>
         )}
-        <button onClick={()=>onPost(deal)} style={{ marginLeft:"auto", background:"transparent",
-          color:"#333", border:"1px solid #1e1e1e", borderRadius:"3px", padding:"7px 12px",
-          fontFamily:"monospace", fontSize:"0.67rem", cursor:"pointer" }}>
-          ✓ Mark Posted
-        </button>
+        <label style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:7, cursor:"pointer",
+          fontFamily:"monospace", fontSize:"0.67rem", color:isPosted?"#2a9d5c":"#444",
+          border:`1px solid ${isPosted?"#2a9d5c44":"#1e1e1e"}`, borderRadius:"3px",
+          padding:"7px 12px", userSelect:"none" }}>
+          <input type="checkbox" checked={!!isPosted} onChange={()=>onTogglePosted(deal)}
+            style={{ accentColor:"#2a9d5c", width:13, height:13, cursor:"pointer" }} />
+          Posted to X
+        </label>
       </div>
     </div>
   );
@@ -377,7 +387,7 @@ const ExportPanel = ({ mgDeals, yaDeals, campid, onClose }) => {
 };
 
 // ─── History page ─────────────────────────────────────────────────────────────
-const HistoryPage = ({ runs, onDelete, onBack, campid, onPost }) => {
+const HistoryPage = ({ runs, onDelete, onBack, campid, onPost, postedUrls, onTogglePosted }) => {
   const [expanded, setExpanded] = useState(null);
   const cutoff = new Date(Date.now() - 28 * 24 * 60 * 60 * 1000);
   const recent = runs
@@ -482,7 +492,8 @@ const HistoryPage = ({ runs, onDelete, onBack, campid, onPost }) => {
                       <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
                         {deals.map((deal, i) => (
                           <DealCard key={i} deal={deal} campid={campid}
-                            catId={catId} idx={i} onPost={onPost} />
+                            catId={catId} idx={i} onPost={onPost}
+                            isPosted={postedUrls.has(deal.ebayUrl)} onTogglePosted={onTogglePosted} />
                         ))}
                       </div>
                     </div>
@@ -509,6 +520,7 @@ export default function App() {
   const [mgError,    setMgError]    = useState("");
   const [yaError,    setYaError]    = useState("");
   const [postHist,   setPostHist]   = useState([]);
+  const [postedUrls, setPostedUrls] = useState(new Set());
   const [nextPost,   setNextPost]   = useState(null);
   const [toast,      setToast]      = useState("");
   const [showExport, setShowExport] = useState(false);
@@ -521,6 +533,8 @@ export default function App() {
       if (h) { const v = JSON.parse(h); setPostHist(v); calcNext(v); }
       const r = localStorage.getItem("scout-runs");
       if (r) setRuns(JSON.parse(r));
+      const p = localStorage.getItem("scout-posted");
+      if (p) setPostedUrls(new Set(JSON.parse(p)));
     } catch {}
   }, []);
 
@@ -533,12 +547,26 @@ export default function App() {
 
   const flash = msg => { setToast(msg); setTimeout(()=>setToast(""),3500); };
 
-  const markPosted = async (deal) => {
+  const markPosted = (deal) => {
     const entry = { title:deal.title, price:deal.price, date:new Date().toISOString() };
     const updated = [...postHist, entry];
     setPostHist(updated); calcNext(updated);
     try { localStorage.setItem("scout-history", JSON.stringify(updated)); } catch {}
-    flash(`✓ "${deal.title}" logged`);
+  };
+
+  const togglePosted = (deal) => {
+    if (!deal.ebayUrl) return;
+    setPostedUrls(prev => {
+      const next = new Set(prev);
+      if (next.has(deal.ebayUrl)) {
+        next.delete(deal.ebayUrl);
+      } else {
+        next.add(deal.ebayUrl);
+        markPosted(deal);
+      }
+      try { localStorage.setItem("scout-posted", JSON.stringify([...next])); } catch {}
+      return next;
+    });
   };
 
   const runScout = useCallback(async () => {
@@ -668,7 +696,7 @@ export default function App() {
             <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
               {budgetDeals.map((deal,i) => (
                 <DealCard key={i} deal={deal} campid={campid} catId={catId}
-                  idx={i} onPost={markPosted} />
+                  idx={i} onPost={markPosted} isPosted={postedUrls.has(deal.ebayUrl)} onTogglePosted={togglePosted} />
               ))}
             </div>
           </div>
@@ -683,7 +711,7 @@ export default function App() {
             <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
               {premiumDeals.map((deal,i) => (
                 <DealCard key={i} deal={deal} campid={campid} catId={catId}
-                  idx={i} onPost={markPosted} />
+                  idx={i} onPost={markPosted} isPosted={postedUrls.has(deal.ebayUrl)} onTogglePosted={togglePosted} />
               ))}
             </div>
           </div>
@@ -694,7 +722,8 @@ export default function App() {
 
   if (view === "history") return (
     <HistoryPage runs={runs} onDelete={deleteRun}
-      onBack={() => setView("main")} campid={campid} onPost={markPosted} />
+      onBack={() => setView("main")} campid={campid} onPost={markPosted}
+      postedUrls={postedUrls} onTogglePosted={togglePosted} />
   );
 
   return (
