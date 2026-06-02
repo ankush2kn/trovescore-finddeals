@@ -15,7 +15,10 @@ const ANGLES = [
   { id:"social",  label:"📚 NYT List",     color:"#5fafff" },
   { id:"gift",    label:"🎁 Gift Angle",   color:"#ff8c42" },
 ];
-const WORKER = import.meta.env.DEV ? "" : "https://finddeals.trovescore.com";
+const WORKER           = import.meta.env.DEV ? "" : "https://finddeals.trovescore.com";
+const NYT_SCAN_LIMIT   = parseInt(import.meta.env.VITE_NYT_SCAN_LIMIT   || "10");
+const BUDGET_DEALS_MAX = parseInt(import.meta.env.VITE_BUDGET_DEALS_MAX || "3");
+const PREMIUM_DEALS_MAX= parseInt(import.meta.env.VITE_PREMIUM_DEALS_MAX|| "3");
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const buildEpnLink = (campid, url) =>
@@ -86,7 +89,7 @@ async function scoutCategory(catId) {
   const premiumCandidates = [];
   let totalTokensIn = 0, totalTokensOut = 0;
 
-  for (const [i, book] of nytBooks.slice(0, 10).entries()) {
+  for (const [i, book] of nytBooks.slice(0, NYT_SCAN_LIMIT).entries()) {
     if (i > 0) await sleep(400);
     const { items, tokensIn, tokensOut } = await fetchEbay(book.title);
     totalTokensIn  += tokensIn;
@@ -150,11 +153,11 @@ async function scoutCategory(catId) {
   const budgetDeals  = dedupe(budgetCandidates)
     .filter(d => d.dealScore >= 7)
     .sort((a, b) => b.dealScore - a.dealScore)
-    .slice(0, 3);
+    .slice(0, BUDGET_DEALS_MAX);
 
   const premiumDeals = dedupe(premiumCandidates)
     .sort((a, b) => b.dealScore - a.dealScore)
-    .slice(0, 3);
+    .slice(0, PREMIUM_DEALS_MAX);
 
   if (!budgetDeals.length && !premiumDeals.length)
     throw new Error("No deals found. Try again or check eBay inventory.");
@@ -539,6 +542,15 @@ export default function App() {
     };
 
     const [mgResult, yaResult] = await Promise.all([runCat("mg"), runCat("ya")]);
+
+    // Remove any YA book that already appears in MG (by title)
+    const mgTitles = new Set([
+      ...mgResult.budgetDeals.map(d => d.title.toLowerCase()),
+      ...mgResult.premiumDeals.map(d => d.title.toLowerCase()),
+    ]);
+    yaResult.budgetDeals  = yaResult.budgetDeals.filter(d => !mgTitles.has(d.title.toLowerCase()));
+    yaResult.premiumDeals = yaResult.premiumDeals.filter(d => !mgTitles.has(d.title.toLowerCase()));
+
     const allDeals = [
       ...mgResult.budgetDeals, ...mgResult.premiumDeals,
       ...yaResult.budgetDeals, ...yaResult.premiumDeals,
